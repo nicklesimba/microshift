@@ -48,6 +48,19 @@ func startCNIPlugin(ctx context.Context, cfg *config.Config, kubeconfigPath stri
 		}
 	}
 
+	// if i understand correctly, i just *additionally* make use of multus manifest, but i still apply ovn manifest.
+	if cfg.EnableMultus {
+		// apply multus manifest from components/multus
+		ns = append(ns, "components/multus/namespace.yaml")
+		sa = append(sa, "components/multus/serviceaccount.yaml")
+		r = append(r, "components/multus/role.yaml")
+		rb = append(rb, "components/multus/rolebinding.yaml")
+		cr = append(cr, "components/multus/clusterrole.yaml")
+		crb = append(crb, "components/multus/clusterrolebinding.yaml")
+		cm = append(cm, "components/multus/configmap.yaml")
+		apps = append(apps, "components/multus/multus-daemonset.yaml")
+	}
+
 	ovnConfig, err := ovn.NewOVNKubernetesConfigFromFileOrDefault(filepath.Dir(config.ConfigFile), cfg.MultiNode.Enabled)
 	if err != nil {
 		return err

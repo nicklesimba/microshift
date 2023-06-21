@@ -36,4 +36,4 @@ node:
     hostnameOverride: ""
     # IP address of the node, passed to the kubelet. If not specified, kubelet will use the node's default IP address.
     nodeIP: ""
-
+enableMultus: false
