@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/coreos/go-systemd/daemon"
+	"github.com/openshift/microshift/pkg/admin/data"
+	"github.com/openshift/microshift/pkg/admin/prerun"
 	"github.com/openshift/microshift/pkg/config"
 	"github.com/openshift/microshift/pkg/controllers"
 	"github.com/openshift/microshift/pkg/kustomize"
@@ -76,10 +78,24 @@ func logConfig(cfg *config.Config) {
 	}
 }
 
+func performPrerun(cfg *config.Config) error {
+	dataManager, err := data.NewManager(config.BackupsDir)
+	if err != nil {
+		return err
+	}
+
+	return prerun.New(dataManager, cfg).Perform()
+}
+
 func RunMicroshift(cfg *config.Config) error {
 	// fail early if we don't have enough privileges
 	if os.Geteuid() > 0 {
 		klog.Fatalf("MicroShift must be run privileged")
+	}
+
+	if err := performPrerun(cfg); err != nil {
+		klog.ErrorS(err, "Pre-run procedure failed")
+		return err
 	}
 
 	logConfig(cfg)
@@ -101,6 +117,10 @@ func RunMicroshift(cfg *config.Config) error {
 
 	if err := util.MakeDir(config.DataDir); err != nil {
 		return fmt.Errorf("failed to create dir %q: %w", config.DataDir, err)
+	}
+
+	if err := prerun.CreateOrValidateDataVersion(); err != nil {
+		return err
 	}
 
 	// TODO: change to only initialize what is strictly necessary for the selected role(s)

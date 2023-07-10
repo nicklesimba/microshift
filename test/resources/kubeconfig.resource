@@ -1,8 +1,14 @@
 *** Settings ***
-Documentation    Keywords for accessing a kubeconfig file for the MicroShift host
-Library    OperatingSystem
-Library    String
-Resource   ../resources/microshift-host.resource
+Documentation       Keywords for accessing a kubeconfig file for the MicroShift host
+
+Library             OperatingSystem
+Library             String
+Library             DataFormats.py
+Resource            ../resources/microshift-host.resource
+
+
+*** Variables ***
+${API_PORT}     ${EMPTY}    # overridden by scenario.sh in CI
 
 
 *** Keywords ***
@@ -13,13 +19,21 @@ Get Kubeconfig
     ...    cat /var/lib/microshift/resources/kubeadmin/${host}/kubeconfig
     ...    sudo=True    return_rc=True
     Should Be Equal As Integers    ${rc}    0
-    Should Not Be Empty            ${kubeconfig}
+    Should Not Be Empty    ${kubeconfig}
     RETURN    ${kubeconfig}
 
 Setup Kubeconfig
-    [Documentation]    Get the kubeconfig file from the configured $USHIFT_HOST, create a temporary file
-    ...                and export it as $KUBECONFIG variable.
+    [Documentation]    Get the kubeconfig file from the configured $USHIFT_HOST,
+    ...    update the server URL based on the API_PORT, create a temporary file,
+    ...    and export it as $KUBECONFIG variable.
     ${kubeconfig}=    Get Kubeconfig    ${USHIFT_HOST}
+    # If we have been given an explicit API port to use, make sure that
+    # port appears in the kubeconfig file.
+    IF    "${API_PORT}"!="${EMPTY}"
+        ${kubeconfig}=    Update Kubeconfig Server Url
+        ...    ${kubeconfig}
+        ...    https://${USHIFT_HOST}:${API_PORT}
+    END
     ${rand}=    Generate Random String
     ${path}=    Join Path    /tmp    ${rand}
     Create File    ${path}    ${kubeconfig}
@@ -38,12 +52,19 @@ Run With Kubeconfig
     IF    ${allow_fail} == False
         Should Be Equal As Integers    ${result.rc}    0
     END
-    RETURN  ${result.stdout}
+    RETURN    ${result.stdout}
 
 Create Namespace
     [Documentation]    Creates a namespace with the given name.
     [Arguments]    ${ns}
     Run With Kubeconfig    oc create namespace ${ns}
+
+Create Random Namespace
+    [Documentation]    Creates a namespace with a random name and return the name.
+    ${rand}=    Generate Random String
+    ${rand}=    Convert To Lowercase    ${rand}
+    Run With Kubeconfig    oc create namespace test-${rand}
+    RETURN    test-${rand}
 
 Remove Namespace
     [Documentation]    Removes the given namespace.

@@ -23,8 +23,6 @@ set -o pipefail
 shopt -s expand_aliases
 shopt -s extglob
 
-trap 'echo "Script exited with error."' ERR
-
 #debugging options
 #trap 'echo "#L$LINENO: $BASH_COMMAND" >&2' DEBUG
 #set -xo functrace
@@ -37,7 +35,8 @@ GO_MOD_DIRS=("$REPOROOT/" "$REPOROOT/etcd")
 
 EMBEDDED_COMPONENTS="route-controller-manager cluster-policy-controller hyperkube etcd"
 EMBEDDED_COMPONENT_OPERATORS="cluster-kube-apiserver-operator cluster-kube-controller-manager-operator cluster-openshift-controller-manager-operator cluster-kube-scheduler-operator machine-config-operator"
-LOADED_COMPONENTS="cluster-dns-operator cluster-ingress-operator service-ca-operator cluster-network-operator"
+LOADED_COMPONENTS="cluster-dns-operator cluster-ingress-operator service-ca-operator cluster-network-operator
+cluster-csi-snapshot-controller-operator"
 declare -a ARCHS=("amd64" "arm64")
 declare -A GOARCH_TO_UNAME_MAP=( ["amd64"]="x86_64" ["arm64"]="aarch64" )
 
@@ -770,6 +769,33 @@ update_openshift_manifests() {
     #       manifests we're manually updating them as needed for now.
     # TODO: Enable in assets.yaml and handle modifications
 
+    #-- csi-snapshot-controller ---------------------------
+    local target="${REPOROOT}/assets/components/csi-snapshot-controller/csi_controller_deployment.yaml"
+    yq -i '.metadata.namespace = "kube-system"' $target
+    yq -i '.spec.template.spec.containers[0].image = "{{ .ReleaseImage.csi_snapshot_controller }}"' $target
+    yq -i '.spec.template.spec.containers[0].args = [ "--v=2", "--leader-election=false"]' $target
+    yq -i 'del(.spec.template.spec.priorityClassName) | del(.spec.template.spec.containers[0].securityContext.seccompProfile)' $target
+    yq -i 'with(.spec.template.spec.containers[0].securityContext; .runAsUser = 65534)' $target
+
+    local target="${REPOROOT}/assets/components/csi-snapshot-controller/webhook_deployment.yaml"
+    yq -i '.metadata.namespace = "kube-system"' $target
+    yq -i '.spec.template.spec.containers[0].image = "{{ .ReleaseImage.csi_snapshot_validation_webhook }}"' $target
+    yq -i 'with(.spec.template.spec.containers[0].args;  .[] |= sub("\${LOG_LEVEL}", "2") )' $target
+    yq -i 'del(.spec.template.spec.priorityClassName)' $target
+    yq -i 'with(.spec.template.spec.containers[0].securityContext; .runAsUser = 65534)' $target
+
+    yq -i '.metadata.namespace = "kube-system"' "${REPOROOT}/assets/components/csi-snapshot-controller/webhook_service.yaml"
+
+    yq -i '.webhooks[0].clientConfig.service.namespace="kube-system"' "${REPOROOT}/assets/components/csi-snapshot-controller/webhook_config.yaml"
+
+    yq -i '.metadata.namespace = "kube-system"' "${REPOROOT}/assets/components/csi-snapshot-controller/serviceaccount.yaml"
+
+    local target="${REPOROOT}/assets/components/csi-snapshot-controller/05_operand_rbac.yaml"
+    yq -i '(.. | select(has("namespace")).namespace) = "kube-system"' $target
+    # snapshotter's rbac is defined as a multidoc, which MicroShift is too picky to work with. Split into separate files
+    yq 'select(.kind == "ClusterRole")' $target > "$(dirname $target)/clusterrole.yaml"
+    yq 'select(.kind == "ClusterRoleBinding")' $target > "$(dirname $target)/clusterrolebinding.yaml"
+
     popd >/dev/null
 }
 
@@ -964,7 +990,7 @@ rebase_to() {
     fi
 
     title "# Removing staging directory"
-    rm -rf "$REPOROOT/_output"
+    rm -rf "${STAGING_DIR}"
 }
 
 

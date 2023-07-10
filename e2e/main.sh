@@ -120,7 +120,7 @@ microshift_debug_info() {
 microshift_cleanup() {
     local output_dir="${1}"
     log "Cleaning MicroShift"
-    ssh_cmd "echo 1 | sudo microshift-cleanup-data --all" &>"${output_dir}/0000-cleanup.log"
+    ssh_cmd "echo 1 | sudo microshift-cleanup-data --all --keep-images" &>"${output_dir}/0000-cleanup.log"
 }
 
 microshift_reprovision() {
@@ -156,7 +156,7 @@ run_test() {
 
     test_start=$(date +%s)
     set +e
-    KUBECONFIG="${konfig}" "${SCRIPT_DIR}/tests/${test}" &>"${output}/0010-test.log"
+    KUBECONFIG="${konfig}" bash "${SCRIPT_DIR}/tests/${test}" &>"${output}/0010-test.log"
     res=$?
     set -e
     test_dur=$(($(date +%s) - test_start))

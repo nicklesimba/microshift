@@ -18,6 +18,7 @@ package util
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	tcpnet "net"
 	"net/http"
 	"os"
@@ -26,8 +27,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openshift/microshift/pkg/config/ovn"
-	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog/v2"
@@ -36,23 +35,17 @@ import (
 var previousGatewayIP string = ""
 
 func GetHostIP() (string, error) {
-	// Prefer OVN-K gateway IP if it is the CNI
-	gatewayIP, err := ovn.GetOVNGatewayIP()
-	if err != nil && !strings.Contains(err.Error(), "no such network interface") {
-		return "", err
-	}
-	if gatewayIP != previousGatewayIP {
-		previousGatewayIP = gatewayIP
-		klog.V(2).Infof("ovn gateway IP address: %s", gatewayIP)
-	}
-
 	ip, err := net.ChooseHostInterface()
 	if err == nil {
 		return ip.String(), nil
 	}
-	klog.V(2).Infof("could not find default route IP address, using ovn gateway IP %q as host IP: %v", gatewayIP, err)
+	hostIP := ip.String()
+	if hostIP != previousGatewayIP {
+		previousGatewayIP = hostIP
+		klog.V(2).Infof("host gateway IP address: %s", hostIP)
+	}
 
-	return gatewayIP, nil
+	return hostIP, nil
 }
 
 func RetryInsecureGet(ctx context.Context, url string) int {
@@ -123,7 +116,10 @@ func AddToNoProxyEnv(additionalEntries ...string) error {
 
 	// unset the lower-case one, and keep only upper-case
 	os.Unsetenv("no_proxy")
-	return errors.Wrap(os.Setenv("NO_PROXY", noProxyEnv), "error updating NO_PROXY")
+	if err := os.Setenv("NO_PROXY", noProxyEnv); err != nil {
+		return fmt.Errorf("failed to update NO_PROXY: %w", err)
+	}
+	return nil
 }
 
 func mapKeys(entries map[string]struct{}) []string {

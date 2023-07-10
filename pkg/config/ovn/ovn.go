@@ -30,29 +30,19 @@ const (
 )
 
 type OVNKubernetesConfig struct {
-	// Configuration for microshift-ovs-init.service
-	OVSInit OVSInitConfig `json:"ovsInit,omitempty"`
 	// MTU to use for the pod interface. Default is 1500.
 	MTU int `json:"mtu,omitempty"`
-}
-
-type OVSInitConfig struct {
-	// disable microshift-ovs-init.service.
-	// OVS bridge "br-ex" needs to be configured manually when disableOVSInit is true.
-	DisableOVSInit bool `json:"disableOVSInit,omitempty"`
-	// Uplink interface for OVS bridge "br-ex"
-	GatewayInterface string `json:"gatewayInterface,omitempty"`
 }
 
 func (o *OVNKubernetesConfig) Validate() error {
 	// br-ex is required to run ovn-kubernetes
 	err := o.validateOVSBridge()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to validate OVS bridge: %w", err)
 	}
 	err = o.validateConfig()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to validate OVN-K configuration: %w", err)
 	}
 	return nil
 }
@@ -60,23 +50,18 @@ func (o *OVNKubernetesConfig) Validate() error {
 // validateOVSBridge validates the existence of ovn-kubernetes br-ex bridge
 func (o *OVNKubernetesConfig) validateOVSBridge() error {
 	_, err := net.InterfaceByName(OVNGatewayInterface)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to find OVN gateway interface %q: %w", OVNGatewayInterface, err)
+	}
+	return nil
 }
 
 // validateConfig validates the user defined configuration in /etc/microshift/ovn.yaml
 func (o *OVNKubernetesConfig) validateConfig() error {
-	// validate gateway interfaces conf
-	if o.OVSInit.GatewayInterface != "" {
-		_, err := net.InterfaceByName(o.OVSInit.GatewayInterface)
-		if err != nil {
-			return fmt.Errorf("gateway interface %s not found", o.OVSInit.GatewayInterface)
-		}
-	}
-
 	// validate MTU conf
 	iface, err := net.InterfaceByName(OVNGatewayInterface)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to find OVN gateway interface %q: %w", OVNGatewayInterface, err)
 	}
 
 	if iface.MTU < o.MTU {
@@ -102,7 +87,6 @@ func (o *OVNKubernetesConfig) getClusterMTU(multinode bool) {
 
 // withDefaults returns the default values when ovn.yaml is not provided
 func (o *OVNKubernetesConfig) withDefaults(multinode bool) *OVNKubernetesConfig {
-	o.OVSInit.DisableOVSInit = false
 	o.getClusterMTU(multinode)
 	return o
 }
@@ -142,23 +126,6 @@ func NewOVNKubernetesConfigFromFileOrDefault(dir string, multinode bool) (*OVNKu
 		return o, nil
 	}
 	return nil, fmt.Errorf("getting OVNKubernetes config: %v", err)
-}
-
-func GetOVNGatewayIP() (string, error) {
-	iface, err := net.InterfaceByName(OVNGatewayInterface)
-	if err != nil {
-		return "", err
-	}
-	addrs, err := iface.Addrs()
-	if err != nil {
-		return "", err
-	}
-	for _, addr := range addrs {
-		ip := addr.(*net.IPNet).IP
-		// return the first available addr, ipv4 takes precedence in ip.String()
-		return ip.String(), nil
-	}
-	return "", fmt.Errorf("failed to get ovn gateway IP address")
 }
 
 func ExcludeOVNKubernetesMasqueradeIPs(addrs []net.Addr) []net.Addr {

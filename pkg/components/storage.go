@@ -47,12 +47,16 @@ func startCSIPlugin(ctx context.Context, cfg *config.Config, kubeconfigPath stri
 			"components/lvms/topolvm-controller_rbac.authorization.k8s.io_v1_clusterrole.yaml",
 			"components/lvms/topolvm-node-scc_rbac.authorization.k8s.io_v1_clusterrole.yaml",
 			"components/lvms/topolvm-node_rbac.authorization.k8s.io_v1_clusterrole.yaml",
+			"components/lvms/topolvm-controller-resizer_rbac.authorization.k8s.io_v1_clusterrole.yaml",
+			"components/lvms/topolvm-csi-snapshotter_rbac.authorization.k8s.io_v1_clusterrole.yaml",
 		}
 		crb = []string{
 			"components/lvms/topolvm-controller_rbac.authorization.k8s.io_v1_clusterrolebinding.yaml",
 			"components/lvms/topolvm-csi-provisioner_rbac.authorization.k8s.io_v1_clusterrolebinding.yaml",
 			"components/lvms/topolvm-node-scc_rbac.authorization.k8s.io_v1_clusterrolebinding.yaml",
 			"components/lvms/topolvm-node_rbac.authorization.k8s.io_v1_clusterrolebinding.yaml",
+			"components/lvms/topolvm-controller-resizer_rbac.authorization.k8s.io_v1_clusterrolebinding.yaml",
+			"components/lvms/topolvm-csi-snapshotter_rbac.authorization.k8s.io_v1_clusterrolebinding.yaml",
 		}
 		cd = []string{
 			"components/lvms/csi-driver.yaml",
@@ -70,6 +74,7 @@ func startCSIPlugin(ctx context.Context, cfg *config.Config, kubeconfigPath stri
 		scc = []string{
 			"components/lvms/topolvm-node-securitycontextconstraint.yaml",
 		}
+		vcs = []string{"components/lvms/topolvm_default-volumeclass.yaml"}
 	)
 
 	if err := lvmd.LvmSupported(); err != nil {
@@ -138,6 +143,10 @@ func startCSIPlugin(ctx context.Context, cfg *config.Config, kubeconfigPath stri
 	}
 	if err := assets.ApplySCCs(ctx, scc, nil, nil, kubeconfigPath); err != nil {
 		klog.Warningf("Failed to apply sccs %v: %v", scc, err)
+		return err
+	}
+	if err := assets.ApplyVolumeSnapshotClass(ctx, kubeconfigPath, vcs, nil, nil); err != nil {
+		klog.Warningf("Failed to apply volumeSnapshotClass %s: %v", vcs, err)
 		return err
 	}
 	return nil

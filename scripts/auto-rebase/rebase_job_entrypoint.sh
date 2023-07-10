@@ -17,12 +17,11 @@ cp /secrets/ci-pull-secret/.dockercfg "$HOME/.pull-secret.json" || {
     echo "WARN: Could not copy registry secret file"
 }
 
-release_amd64="$(oc get configmap/release-release-images-nightly-amd64 -o yaml \
-    | yq '.data."release-images-nightly-amd64.yaml"' \
-    | jq -r '.metadata.name')"
-release_arm64="$(oc get configmap/release-release-images-nightly-arm64 -o yaml \
-    | yq '.data."release-images-nightly-arm64.yaml"' \
-    | jq -r '.metadata.name')"
+# log in into cluster's registry
+oc registry login --to=/tmp/registry.json
+release_amd64="$(oc image info --registry-config=/tmp/registry.json $OPENSHIFT_RELEASE_IMAGE -o json | jq -r '.config.config.Labels."io.openshift.release"')"
+release_arm64="$(oc image info --registry-config=/tmp/registry.json $OPENSHIFT_RELEASE_IMAGE_ARM -o json | jq -r '.config.config.Labels."io.openshift.release"')"
+
 # LVMS is not tracked in the OCP release image.  Instead, rely on the latest X.Y stream as the release image.
 #  LVMS also does not cut nightly releases where ocp-release does.  This means that latest ocp-releases' y-stream
 #  can increment independently from LVMS, and will usually be 1 y-stream ahead of LVMS in-between OCP releases.

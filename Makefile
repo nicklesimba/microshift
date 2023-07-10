@@ -23,8 +23,9 @@ SOURCE_GIT_TAG := ${MICROSHIFT_VERSION}
 EMBEDDED_GIT_TAG ?= ${SOURCE_GIT_TAG}
 EMBEDDED_GIT_COMMIT ?= ${SOURCE_GIT_COMMIT}
 EMBEDDED_GIT_TREE_STATE ?= ${SOURCE_GIT_TREE_STATE}
-MAJOR := $(shell echo $(SOURCE_GIT_TAG) | cut -f1 -d.)
-MINOR := $(shell echo $(SOURCE_GIT_TAG) | cut -f2 -d.)
+MAJOR := $(shell echo $(SOURCE_GIT_TAG) | awk -F'[._-]' '{print $$1}')
+MINOR := $(shell echo $(SOURCE_GIT_TAG) | awk -F'[._-]' '{print $$2}')
+PATCH := $(shell echo $(SOURCE_GIT_TAG) | awk -F'[._-]' '{print $$3}')
 
 SRC_ROOT :=$(shell pwd)
 
@@ -76,6 +77,7 @@ GO_LD_FLAGS := $(GC_FLAGS) -ldflags " \
                    -X k8s.io/client-go/pkg/version.buildDate=$(BIN_TIMESTAMP) \
                    -X github.com/openshift/microshift/pkg/version.majorFromGit=$(MAJOR) \
                    -X github.com/openshift/microshift/pkg/version.minorFromGit=$(MINOR) \
+                   -X github.com/openshift/microshift/pkg/version.patchFromGit=$(PATCH) \
                    -X github.com/openshift/microshift/pkg/version.versionFromGit=$(EMBEDDED_GIT_TAG) \
                    -X github.com/openshift/microshift/pkg/version.commitFromGit=$(EMBEDDED_GIT_COMMIT) \
                    -X github.com/openshift/microshift/pkg/version.gitTreeState=$(EMBEDDED_GIT_TREE_STATE) \
@@ -94,13 +96,21 @@ GO_BUILD_FLAGS :=-tags 'include_gcs include_oss containers_image_openpgp gssapi 
 GO_TEST_FLAGS=$(GO_BUILD_FLAGS)
 GO_TEST_PACKAGES=./cmd/... ./pkg/...
 
+# Enable CGO when building microshift binary for access to local libraries.
+# Use an environment variable to allow CI to disable when cross-compiling.
+export CGO_ENABLED ?= 1
+
 all: generate-config microshift etcd
 
-# target "build:" defined in vendor/github.com/openshift/build-machinery-go/make/targets/golang/build.mk
-# Disable CGO when building microshift binary
-build: export CGO_ENABLED=0
-
 microshift: build
+
+# A target for local developer workflows. This assumes configure-vm.sh
+# was already run to build and install the RPM.
+.PHONY: install
+install: build
+	sudo systemctl stop microshift
+	sudo cp $(OUTPUT_DIR)/bin/microshift* /usr/bin/
+	sudo systemctl start microshift
 
 .PHONY: etcd
 export GO_BUILD_FLAGS
@@ -108,6 +118,7 @@ etcd:
 	GO_LD_FLAGS="$(GC_FLAGS) -ldflags \"\
                    -X main.majorFromGit=$(MAJOR) \
                    -X main.minorFromGit=$(MINOR) \
+                   -X main.patchFromGit=$(PATCH) \
                    -X main.versionFromGit=$(EMBEDDED_GIT_TAG) \
                    -X main.commitFromGit=$(EMBEDDED_GIT_COMMIT) \
                    -X main.gitTreeState=$(EMBEDDED_GIT_TREE_STATE) \
@@ -140,7 +151,7 @@ verify-assets:
 	./scripts/verify/verify-assets.sh
 
 .PHONY: verify-go
-verify-go: verify-golangci
+verify-go: verify-gofmt verify-golangci
 
 .PHONY: verify-golangci
 verify-golangci:
@@ -294,6 +305,8 @@ clean-cross-build:
 	if [ -d '$(CROSS_BUILD_BINDIR)' ]; then $(RM) -rf '$(CROSS_BUILD_BINDIR)'; fi
 	if [ -d '$(OUTPUT_DIR)/staging' ]; then $(RM) -rf '$(OUTPUT_DIR)/staging'; fi
 	if [ -d '$(OUTPUT_DIR)/venv' ]; then $(RM) -rf '$(OUTPUT_DIR)/venv'; fi
+	if [ -d '$(OUTPUT_DIR)/robotenv' ]; then $(RM) -rf '$(OUTPUT_DIR)/robotenv'; fi
+	if [ -d '$(OUTPUT_DIR)/goenv' ]; then $(RM) -rf '$(OUTPUT_DIR)/goenv'; fi
 	if [ -d '$(RPM_BUILD_DIR)' ]; then $(RM) -rf '$(RPM_BUILD_DIR)'; fi
 	if [ -d '$(ISO_DIR)' ]; then $(RM) -rf '$(ISO_DIR)'; fi
 	if [ -d '$(OUTPUT_DIR)' ]; then rmdir --ignore-fail-on-non-empty '$(OUTPUT_DIR)'; fi
@@ -335,3 +348,7 @@ verify-config: generate-config
 .PHONY: e2e
 e2e:
 	./test/run.sh
+
+.PHONY: rf-fmt
+rf-fmt:
+	@./test/format.sh

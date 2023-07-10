@@ -10,7 +10,6 @@ import (
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextclientv1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	apiruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -38,6 +37,9 @@ var (
 		"crd/0000_03_security-openshift_01_scc.crd.yaml",
 		"crd/route.crd.yaml",
 		"components/lvms/topolvm.io_logicalvolumes.yaml",
+		"components/csi-snapshot-controller/volumesnapshotclasses.yaml",
+		"components/csi-snapshot-controller/volumesnapshotcontents.yaml",
+		"components/csi-snapshot-controller/volumesnapshots.yaml",
 	}
 	// for apis that belong to a group served by openshift-apiserver but are themselves served
 	// as a CR, the crd registration controller will not automatically create local apiservices
@@ -130,7 +132,7 @@ func ApplyCRDs(ctx context.Context, cfg *config.Config) error {
 		return err
 	}
 
-	apiRegistrationScheme := runtime.NewScheme()
+	apiRegistrationScheme := apiruntime.NewScheme()
 	apiRegistrationCodecs := serializer.NewCodecFactory(apiRegistrationScheme)
 
 	for _, apiServiceManifest := range localAPIServices {
@@ -139,7 +141,7 @@ func ApplyCRDs(ctx context.Context, cfg *config.Config) error {
 			return err
 		}
 		var apiService apiregistrationv1.APIService
-		err = runtime.DecodeInto(apiRegistrationCodecs.UniversalDecoder(apiregistrationv1.SchemeGroupVersion), apiServiceBytes, &apiService)
+		err = apiruntime.DecodeInto(apiRegistrationCodecs.UniversalDecoder(apiregistrationv1.SchemeGroupVersion), apiServiceBytes, &apiService)
 		if err != nil {
 			return err
 		}

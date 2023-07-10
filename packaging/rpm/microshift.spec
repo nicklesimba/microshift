@@ -46,6 +46,17 @@ BuildRequires: make
 BuildRequires: policycoreutils
 BuildRequires: systemd
 
+# DO NOT REMOVE
+#
+# Without the dependency on the compiler via this file, the production
+# build pipeline does not work. Sometimes that pipeline requires
+# compiling with a version of go that is not released into public RHEL
+# repos, yet, so we do not specify a version here. Instead, the
+# version is checked in the prep step below.
+#
+BuildRequires: golang
+# DO NOT REMOVE
+
 Requires: cri-o >= 1.25
 Requires: cri-tools >= 1.25
 Requires: iptables
@@ -86,7 +97,7 @@ The microshift-selinux package provides the SELinux policy modules required by M
 
 %package networking
 Summary: Networking components for MicroShift
-Requires: openvswitch3.1
+Requires: openvswitch3.1 == 3.1.0-14.el9fdp
 Requires: NetworkManager
 Requires: NetworkManager-ovs
 Requires: jq
@@ -151,6 +162,9 @@ install -p -m755 scripts/microshift-cleanup-data.sh %{buildroot}%{_bindir}/micro
 restorecon -v %{buildroot}%{_bindir}/microshift
 restorecon -v %{buildroot}%{_bindir}/microshift-etcd
 
+install -d -m755 %{buildroot}{_sharedstatedir}/microshift
+install -d -m755 %{buildroot}{_sharedstatedir}/microshift-backups
+
 install -d -m755 %{buildroot}%{_sysconfdir}/crio/crio.conf.d
 
 %ifarch %{arm} aarch64
@@ -171,13 +185,23 @@ install -p -m644 packaging/systemd/microshift.service %{buildroot}%{_unitdir}/mi
 
 install -d -m755 %{buildroot}/%{_sysconfdir}/microshift
 install -d -m755 %{buildroot}/%{_sysconfdir}/microshift/manifests
+install -d -m755 %{buildroot}/%{_sysconfdir}/microshift/manifests.d
 install -p -m644 packaging/microshift/config.yaml %{buildroot}%{_sysconfdir}/microshift/config.yaml.default
 install -p -m644 packaging/microshift/lvmd.yaml %{buildroot}%{_sysconfdir}/microshift/lvmd.yaml.default
 install -p -m644 packaging/microshift/ovn.yaml %{buildroot}%{_sysconfdir}/microshift/ovn.yaml.default
 
+# /usr/lib/microshift manifest directories for other packages to add to
+install -d -m755 %{buildroot}/%{_prefix}/lib/microshift
+install -d -m755 %{buildroot}/%{_prefix}/lib/microshift/manifests
+install -d -m755 %{buildroot}/%{_prefix}/lib/microshift/manifests.d
+
 # release-info files
 mkdir -p -m755 %{buildroot}%{_datadir}/microshift/release
 install -p -m644 assets/release/release*.json %{buildroot}%{_datadir}/microshift/release
+
+# spec validation files
+mkdir -p -m755 %{buildroot}%{_datadir}/microshift/spec
+install -p -m644 cmd/generate-config/config/config-openapi-spec.json %{buildroot}%{_datadir}/microshift/spec/config-openapi-spec.json
 
 # Memory tweaks to the OpenvSwitch services
 mkdir -p -m755 %{buildroot}%{_sysconfdir}/systemd/system/ovs-vswitchd.service.d
@@ -208,12 +232,18 @@ install -d %{buildroot}%{_datadir}/selinux/packages/%{selinuxtype}
 install -m644 packaging/selinux/microshift.pp.bz2 %{buildroot}%{_datadir}/selinux/packages/%{selinuxtype}
 
 # Greenboot scripts
-install -d -m755 %{buildroot}%{_sysconfdir}/greenboot/check/required.d
-install -d -m755 %{buildroot}%{_sysconfdir}/greenboot/red.d
-install -p -m755 packaging/greenboot/microshift-running-check.sh %{buildroot}%{_sysconfdir}/greenboot/check/required.d/40_microshift_running_check.sh
-install -p -m755 packaging/greenboot/microshift-pre-rollback.sh %{buildroot}%{_sysconfdir}/greenboot/red.d/40_microshift_pre_rollback.sh
 install -d -m755 %{buildroot}%{_datadir}/microshift/functions
 install -p -m644 packaging/greenboot/functions.sh %{buildroot}%{_datadir}/microshift/functions/greenboot.sh
+
+install -d -m755 %{buildroot}%{_sysconfdir}/greenboot/check/required.d
+install -p -m755 packaging/greenboot/microshift-running-check.sh %{buildroot}%{_sysconfdir}/greenboot/check/required.d/40_microshift_running_check.sh
+
+install -d -m755 %{buildroot}%{_sysconfdir}/greenboot/red.d
+install -p -m755 packaging/greenboot/microshift-pre-rollback.sh %{buildroot}%{_sysconfdir}/greenboot/red.d/40_microshift_pre_rollback.sh
+install -p -m755 packaging/greenboot/microshift_set_unhealthy.sh %{buildroot}%{_sysconfdir}/greenboot/red.d/40_microshift_set_unhealthy.sh
+
+install -d -m755 %{buildroot}%{_sysconfdir}/greenboot/green.d
+install -p -m755 packaging/greenboot/microshift_set_healthy.sh %{buildroot}%{_sysconfdir}/greenboot/green.d/40_microshift_set_healthy.sh
 
 %post
 
@@ -264,11 +294,17 @@ systemctl enable --now --quiet openvswitch || true
 %{_bindir}/microshift-cleanup-data
 %{_unitdir}/microshift.service
 %{_sysconfdir}/crio/crio.conf.d/microshift.conf
+%{_datadir}/microshift/spec/config-openapi-spec.json
 %dir %{_sysconfdir}/microshift
 %dir %{_sysconfdir}/microshift/manifests
+%dir %{_sysconfdir}/microshift/manifests.d
 %config(noreplace) %{_sysconfdir}/microshift/config.yaml.default
 %config(noreplace) %{_sysconfdir}/microshift/lvmd.yaml.default
 %config(noreplace) %{_sysconfdir}/microshift/ovn.yaml.default
+
+%dir %{_prefix}/lib/microshift
+%dir %{_prefix}/lib/microshift/manifests
+%dir %{_prefix}/lib/microshift/manifests.d
 
 %files release-info
 %{_datadir}/microshift/release/release*.json
@@ -295,14 +331,23 @@ systemctl enable --now --quiet openvswitch || true
 %files greenboot
 %{_sysconfdir}/greenboot/check/required.d/40_microshift_running_check.sh
 %{_sysconfdir}/greenboot/red.d/40_microshift_pre_rollback.sh
+%{_sysconfdir}/greenboot/red.d/40_microshift_set_unhealthy.sh
+%{_sysconfdir}/greenboot/green.d/40_microshift_set_healthy.sh
 %{_datadir}/microshift/functions/greenboot.sh
 
 # Use Git command to generate the log and replace the VERSION string
 # LANG=C git log --date="format:%a %b %d %Y" --pretty="tformat:* %cd %an <%ae> VERSION%n- %s%n" packaging/rpm/microshift.spec
 %changelog
-* Mon May 01 2023 Doug Hellmann <dhellmann@redhat.com> 4.14.0
+* Tue Jun  6 2023 Doug Hellmann <dhellmann@redhat.com> 4.14.0
+- Restore golang BuildRequires setting
+
+* Mon May 15 2023 Doug Hellmann <dhellmann@redhat.com> 4.14.0
 - Remove version specifier for container-selinux to let the system
   make the best choice.
+
+* Mon Apr 24 2023 Doug Hellmann <dhellmann@redhat.com> 4.14.0
+- Add /etc/microshift/manifests.d and /usr/lib/microshift/manifests.d
+  directories.
 
 * Wed Apr 12 2023 Zenghui Shi <zshi@redhat.com> 4.13.0
 - Upgrade openvswitch package version to 3.1

@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e -o pipefail
+set -eo pipefail
 
 ROOTDIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/../../" && pwd )"
 SCRIPTDIR=${ROOTDIR}/scripts/image-builder
@@ -14,6 +14,9 @@ OCP_PULL_SECRET_FILE=
 MICROSHIFT_RPM_SOURCE=${ROOTDIR}/_output/rpmbuild/
 AUTHORIZED_KEYS_FILE=
 AUTHORIZED_KEYS=
+CA_TRUST_FILES=
+MIRROR_REGISTRY_HOST=
+MIRROR_REGISTRY_INSECURE=true
 PROMETHEUS=false
 EMBED_CONTAINERS=false
 BUILD_IMAGE_TYPE=container
@@ -58,6 +61,15 @@ usage() {
     echo "  -open_firewall_ports port1[:protocol1],...,portN[:protocolN]"
     echo "          One or more comma-separated ports (optionally with protocol)"
     echo "          to be allowed by firewall (default: none)"
+    echo "  -mirror_registry_host host[:port]"
+    echo "          Host and optionally port of the mirror container registry to"
+    echo "          be used by the container runtime when pulling images. The connection"
+    echo "          to the mirror is configured as unsecure unless a CA trust certificate"
+    echo "          is specified using -ca_trust_files parameter"
+    echo "  -ca_trust_files /path/to/file1.pem,...,/path/to/fileN.pem"
+    echo "          Path to one or more comma-separated public certificate files"
+    echo "          to be included in the image at the /etc/pki/ca-trust/source/anchors"
+    echo "          directory and installed using the update-ca-trust utility"
     echo "  -prometheus"
     echo "          Add Prometheus process exporter to the image. See"
     echo "          https://github.com/ncabatoff/process-exporter for more information"
@@ -157,9 +169,24 @@ install_caddy_rpm() {
     if [ "${OSTREE_SERVER_URL}" = "http://127.0.0.1:8085/repo" ] ; then
         title "Downloading Caddy package"
         # The package comes from the EPEL repository
-        dnf download -y -q caddy
+        sudo dnf download -y -q caddy
         CUSTOM_RPM_FILES+="$(pwd)/caddy-*.rpm,"
     fi
+}
+
+open_repo_permissions() {
+    find "$1" -type f -exec chmod a+r  {} \;
+    find "$1" -type d -exec chmod a+rx {} \;
+}
+
+comma_separated_files_readable() {
+    local file_list="$1"
+    for file in ${file_list//,/ } ; do
+        if [ ! -r "${file}" ] ; then
+            echo "The '${file}' input file is not readable or it does not exist"
+            exit 1
+        fi
+    done
 }
 
 # Parse the command line
@@ -188,6 +215,7 @@ while [ $# -gt 0 ] ; do
         shift
         CUSTOM_RPM_FILES="$1"
         [ -z "${CUSTOM_RPM_FILES}" ] && usage "Custom RPM packages not specified"
+        comma_separated_files_readable "${CUSTOM_RPM_FILES}"
         shift
         ;;
     -embed_containers)
@@ -221,6 +249,20 @@ while [ $# -gt 0 ] ; do
         shift
         OPEN_FIREWALL_PORTS="$1"
         [ -z "${OPEN_FIREWALL_PORTS}" ] && usage "Firewall ports not specified"
+        shift
+        ;;
+    -mirror_registry_host)
+        shift
+        MIRROR_REGISTRY_HOST="$1"
+        [ -z "${MIRROR_REGISTRY_HOST}" ] && usage "Mirror registry host not specified"
+        shift
+        ;;
+    -ca_trust_files)
+        shift
+        MIRROR_REGISTRY_INSECURE=false
+        CA_TRUST_FILES="$1"
+        [ -z "${CA_TRUST_FILES}" ] && usage "CA trust certificate files not specified"
+        comma_separated_files_readable "${CA_TRUST_FILES}"
         shift
         ;;
     -prometheus)
@@ -279,6 +321,7 @@ if [ "$(find microshift-local -name '*.rpm' | wc -l)" -eq 0 ] ; then
     exit 1
 fi
 createrepo microshift-local >/dev/null
+open_repo_permissions microshift-local
 
 # Determine the image version from the RPM contents
 RELEASE_INFO_FILE=$(find . -name 'microshift-release-info-*.rpm' | tail -1)
@@ -309,6 +352,7 @@ if [ "$(find openshift-local -name '*.rpm' | wc -l)" -eq 0 ] ; then
     exit 1
 fi
 createrepo openshift-local >/dev/null
+open_repo_permissions openshift-local
 
 # Install prometheus process exporter
 install_prometheus_rpm
@@ -325,6 +369,7 @@ if [ -n "${CUSTOM_RPM_FILES}" ] ; then
         cp "${rpm}" custom-rpms
     done
     createrepo custom-rpms >/dev/null
+    open_repo_permissions custom-rpms
 fi
 
 title "Loading sources for OpenShift and MicroShift"
@@ -358,23 +403,49 @@ if ${EMBED_CONTAINERS} ; then
         >> blueprint_v0.0.1.toml
 fi
 
-# Add open firewall ports
-if [ -n "${OPEN_FIREWALL_PORTS}" ] ; then
-    for port in ${OPEN_FIREWALL_PORTS//,/ } ; do
+# Configure registry mirror
+if [ -n "${MIRROR_REGISTRY_HOST}" ] ; then
+    cat < "${SCRIPTDIR}"/config/registries.conf.template | \
+        sed "s;REPLACE_MIRROR_REGISTRY_HOST;${MIRROR_REGISTRY_HOST};g" | \
+        sed "s;REPLACE_MIRROR_REGISTRY_INSECURE;${MIRROR_REGISTRY_INSECURE};g" | \
+        sed 's;";\\";g' \
+        > registries.conf
+
         cat >> blueprint_v0.0.1.toml <<EOF
 
-[customizations.firewall]
-ports = ["${port}"]
+[[customizations.files]]
+path = "/etc/containers/registries.conf.d/999-microshift-mirror.conf"
+data = "$(sed 's/$/\\n/g' < registries.conf | tr -d '\n')"
+EOF
+fi
+
+# Add CA trust certificate file names and contents with new lines replaced by '\n'
+if [ -n "${CA_TRUST_FILES}" ] ; then
+    for cafile in ${CA_TRUST_FILES//,/ } ; do
+        cat >> blueprint_v0.0.1.toml <<EOF
+
+[[customizations.files]]
+path = "/etc/pki/ca-trust/source/anchors/$(basename "${cafile}")"
+data = "$(sed 's/$/\\n/g' < "${cafile}" | tr -d '\n')"
 EOF
     done
 fi
 
-# Add the firewall customization required by Prometheus
+# Open the firewall ports required by Prometheus
 if ${PROMETHEUS} ; then
+    if [ -z "${OPEN_FIREWALL_PORTS}" ] ; then
+        OPEN_FIREWALL_PORTS="9256:tcp"
+    else
+        OPEN_FIREWALL_PORTS+=",9256:tcp"
+    fi
+fi
+
+# Add open firewall ports to the blueprint
+if [ -n "${OPEN_FIREWALL_PORTS}" ] ; then
     cat >> blueprint_v0.0.1.toml <<EOF
 
 [customizations.firewall]
-ports = ["9256:tcp"]
+ports = ["${OPEN_FIREWALL_PORTS//,/\", \"}"]
 EOF
 fi
 
