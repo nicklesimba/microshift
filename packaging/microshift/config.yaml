@@ -24,6 +24,8 @@ manifests:
         - /usr/lib/microshift/manifests.d/*
         - /etc/microshift/manifests
         - /etc/microshift/manifests.d/*
+multus:
+    enabled: false
 network:
     # IP address pool to use for pod IPs. This field is immutable after installation.
     clusterNetwork:
@@ -38,4 +40,3 @@ node:
     hostnameOverride: ""
     # IP address of the node, passed to the kubelet. If not specified, kubelet will use the node's default IP address.
     nodeIP: ""
-enableMultus: false
